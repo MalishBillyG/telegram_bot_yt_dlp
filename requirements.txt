@@ -1,0 +1,4 @@
+aiogram==3.30.0
+python-dotenv==1.2.2
+# yt-dlp не фиксируем: старые версии перестают работать с YouTube
+yt-dlp
