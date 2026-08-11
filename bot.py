@@ -248,6 +248,9 @@ async def video_type_handler(
         )
 
         await reset_state(state)
+
+        await callback.message.answer( "🔗 Попробуй отправить новую ссылку." )
+
         return
 
     formats = []
@@ -289,6 +292,9 @@ async def video_type_handler(
         )
 
         await reset_state(state)
+
+        await callback.message.answer( "🔗 Жду новую ссылку." )
+        
         return
 
     # Сортируем от маленького качества к большому
@@ -360,6 +366,9 @@ async def audio_type_handler(
         )
 
         await reset_state(state)
+
+        await callback.message.answer( "🔗 Жду новую ссылку." )
+        
         return
 
     await callback.message.edit_text(
@@ -382,6 +391,8 @@ async def audio_type_handler(
         )
 
     await reset_state(state)
+
+    await callback.message.answer( "🔗 Жду новую ссылку." )
 
 
 # ============================================================
@@ -428,6 +439,9 @@ async def quality_handler(
         )
 
         await reset_state(state)
+
+        await callback.message.answer( "🔗 Жду новую ссылку." )
+
         return
 
     await callback.message.edit_text(
@@ -450,6 +464,8 @@ async def quality_handler(
         )
 
     await reset_state(state)
+
+    await callback.message.answer( "🔗 Жду новую ссылку." )
 
 
 # ============================================================
