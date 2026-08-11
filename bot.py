@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import yt_dlp
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -174,7 +174,7 @@ async def start_handler(message: Message, state: FSMContext):
 # Получение ссылки
 # ============================================================
 
-@dp.message(DownloadState.waiting_for_url)
+@dp.message(StateFilter(None, DownloadState.waiting_for_url))
 async def url_handler(message: Message, state: FSMContext):
 
     if not message.text:
@@ -633,6 +633,8 @@ def download_audio(
 async def main():
 
     print("🤖 Бот запущен!")
+
+    await bot.delete_webhook(drop_pending_updates=True)
 
     await dp.start_polling(bot)
 
