@@ -1,23 +1,27 @@
 import asyncio
 import os
 from pathlib import Path
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 import yt_dlp
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart, StateFilter
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import (
     Message,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    TelegramObject,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from dotenv import load_dotenv
+
+import db
 
 
 # ============================================================
@@ -31,12 +35,41 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("Переменная BOT_TOKEN не установлена")
 
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+
+def is_admin(user_id: int) -> bool:
+    return ADMIN_ID != 0 and user_id == ADMIN_ID
+
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================
+# Трекинг пользователей (для админ-аналитики)
+# ============================================================
+
+class UserTrackingMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+
+        user = data.get("event_from_user")
+
+        if user is not None:
+            db.touch_user(user.id, user.username, user.first_name)
+
+        return await handler(event, data)
+
+
+dp.update.outer_middleware(UserTrackingMiddleware())
 
 
 # ============================================================
@@ -168,6 +201,99 @@ async def start_handler(message: Message, state: FSMContext):
         "Привет! 👋\n\n"
         "Отправь мне ссылку на YouTube или TikTok."
     )
+
+
+# ============================================================
+# Админ: статистика
+# ============================================================
+
+@dp.message(Command("admin_stats"))
+async def admin_stats_handler(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    stats = db.get_stats()
+
+    by_platform = "\n".join(
+        f"  • {platform}: {count}"
+        for platform, count in stats["by_platform"].items()
+    ) or "  —"
+
+    by_type = "\n".join(
+        f"  • {media_type}: {count}"
+        for media_type, count in stats["by_type"].items()
+    ) or "  —"
+
+    text = (
+        "📊 Статистика бота\n\n"
+        f"👥 Пользователей всего: {stats['total_users']}\n"
+        f"🆕 Новых за 24ч: {stats['new_today']}\n"
+        f"🆕 Новых за 7д: {stats['new_week']}\n"
+        f"🟢 Активных за 24ч: {stats['active_today']}\n"
+        f"🟢 Активных за 7д: {stats['active_week']}\n\n"
+        f"⬇️ Скачиваний всего: {stats['total_downloads']}\n"
+        f"⬇️ Скачиваний за 24ч: {stats['downloads_today']}\n\n"
+        f"По платформам:\n{by_platform}\n\n"
+        f"По типу:\n{by_type}"
+    )
+
+    await message.answer(text)
+
+
+# ============================================================
+# Админ: список пользователей
+# ============================================================
+
+@dp.message(Command("admin_users"))
+async def admin_users_handler(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    users = db.get_recent_users(limit=20)
+
+    if not users:
+        await message.answer("Пользователей пока нет.")
+        return
+
+    lines = ["👥 Последние пользователи (до 20, по активности):\n"]
+
+    for u in users:
+        name = f"@{u['username']}" if u["username"] else (u["first_name"] or "—")
+
+        lines.append(
+            f"• {name} (id {u['user_id']})\n"
+            f"   первый визит: {u['first_seen'][:16]}\n"
+            f"   последняя активность: {u['last_seen'][:16]}"
+        )
+
+    await message.answer("\n".join(lines))
+
+
+# ============================================================
+# Админ: топ пользователей по скачиваниям
+# ============================================================
+
+@dp.message(Command("admin_top"))
+async def admin_top_handler(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    users = db.get_top_users(limit=10)
+
+    if not users:
+        await message.answer("Скачиваний пока не было.")
+        return
+
+    lines = ["🏆 Топ пользователей по скачиваниям:\n"]
+
+    for u in users:
+        name = f"@{u['username']}" if u["username"] else (u["first_name"] or "—")
+        lines.append(f"• {name} (id {u['user_id']}) — {u['downloads']}")
+
+    await message.answer("\n".join(lines))
 
 
 # ============================================================
@@ -346,6 +472,7 @@ async def audio_type_handler(
     data = await state.get_data()
 
     url = data["url"]
+    platform = data["platform"]
 
     await callback.message.edit_text(
         "⏳ Скачиваю аудио..."
@@ -368,8 +495,10 @@ async def audio_type_handler(
         await reset_state(state)
 
         await callback.message.answer( "🔗 Жду новую ссылку." )
-        
+
         return
+
+    db.log_download(callback.from_user.id, platform, "audio")
 
     await callback.message.edit_text(
         "✅ Аудио скачано!\n\n"
@@ -443,6 +572,8 @@ async def quality_handler(
         await callback.message.answer( "🔗 Жду новую ссылку." )
 
         return
+
+    db.log_download(callback.from_user.id, platform, "video")
 
     await callback.message.edit_text(
         "✅ Видео скачано!\n\n"
@@ -631,6 +762,8 @@ def download_audio(
 # ============================================================
 
 async def main():
+
+    db.init_db()
 
     print("🤖 Бот запущен!")
 
