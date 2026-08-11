@@ -49,6 +49,12 @@ class DownloadState(StatesGroup):
     choosing_quality = State()
 
 
+async def reset_state(state: FSMContext):
+    """Сбрасывает FSM и возвращает готовность принять новую ссылку."""
+    await state.clear()
+    await state.set_state(DownloadState.waiting_for_url)
+
+
 # ============================================================
 # Определение платформы
 # ============================================================
@@ -241,7 +247,7 @@ async def video_type_handler(
             f"{e}"
         )
 
-        await state.clear()
+        await reset_state(state)
         return
 
     formats = []
@@ -282,7 +288,7 @@ async def video_type_handler(
             "❌ Не удалось найти подходящие видеоформаты."
         )
 
-        await state.clear()
+        await reset_state(state)
         return
 
     # Сортируем от маленького качества к большому
@@ -353,7 +359,7 @@ async def audio_type_handler(
             f"❌ Ошибка при скачивании:\n\n{e}"
         )
 
-        await state.clear()
+        await reset_state(state)
         return
 
     await callback.message.edit_text(
@@ -375,7 +381,7 @@ async def audio_type_handler(
             f"❌ Не удалось отправить файл:\n\n{e}"
         )
 
-    await state.clear()
+    await reset_state(state)
 
 
 # ============================================================
@@ -421,7 +427,7 @@ async def quality_handler(
             f"❌ Ошибка при скачивании:\n\n{e}"
         )
 
-        await state.clear()
+        await reset_state(state)
         return
 
     await callback.message.edit_text(
@@ -443,7 +449,7 @@ async def quality_handler(
             f"❌ Не удалось отправить файл:\n\n{e}"
         )
 
-    await state.clear()
+    await reset_state(state)
 
 
 # ============================================================
@@ -458,15 +464,11 @@ async def cancel_handler(
 
     await callback.answer()
 
-    await state.clear()
+    await reset_state(state)
 
     await callback.message.edit_text(
         "❌ Скачивание отменено.\n\n"
         "Отправь новую ссылку."
-    )
-
-    await state.set_state(
-        DownloadState.waiting_for_url
     )
 
 
