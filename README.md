@@ -54,6 +54,33 @@ make run
 - `/admin_users` — последние 20 пользователей по активности (id, username,
   дата первого визита и последней активности)
 - `/admin_top` — топ-10 пользователей по количеству скачиваний
+- `/admin_links <user_id>` — последние 20 ссылок, которые скачивал конкретный
+  пользователь (id можно взять из `/admin_users`)
+
+## Прямой доступ к базе (bot.db)
+
+Через `sqlite3` CLI (`apt install sqlite3`, если не установлен):
+
+```bash
+sqlite3 bot.db
+.tables
+.schema users
+.schema downloads
+SELECT * FROM users WHERE user_id = 123456789;
+SELECT * FROM downloads WHERE user_id = 123456789;
+```
+
+Либо без установки CLI — через встроенный в Python модуль `sqlite3`:
+
+```bash
+.venv/bin/python -c "
+import sqlite3
+conn = sqlite3.connect('bot.db')
+conn.row_factory = sqlite3.Row
+for row in conn.execute('SELECT * FROM users'):
+    print(dict(row))
+"
+```
 
 ## Структура
 
