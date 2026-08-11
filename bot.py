@@ -297,6 +297,44 @@ async def admin_top_handler(message: Message):
 
 
 # ============================================================
+# Админ: ссылки конкретного пользователя
+# ============================================================
+
+@dp.message(Command("admin_links"))
+async def admin_links_handler(message: Message):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer(
+            "Использование: /admin_links <user_id>\n\n"
+            "Id пользователей можно посмотреть через /admin_users."
+        )
+        return
+
+    user_id = int(parts[1].strip())
+
+    downloads = db.get_user_downloads(user_id, limit=20)
+
+    if not downloads:
+        await message.answer("У этого пользователя пока нет скачиваний.")
+        return
+
+    lines = [f"🔗 Последние ссылки пользователя {user_id} (до 20):\n"]
+
+    for d in downloads:
+        lines.append(
+            f"• [{d['platform']}/{d['media_type']}] "
+            f"{d['url'] or '—'}\n   {d['created_at'][:16]}"
+        )
+
+    await message.answer("\n".join(lines))
+
+
+# ============================================================
 # Получение ссылки
 # ============================================================
 
@@ -498,7 +536,7 @@ async def audio_type_handler(
 
         return
 
-    db.log_download(callback.from_user.id, platform, "audio")
+    db.log_download(callback.from_user.id, platform, "audio", url)
 
     await callback.message.edit_text(
         "✅ Аудио скачано!\n\n"
@@ -573,7 +611,7 @@ async def quality_handler(
 
         return
 
-    db.log_download(callback.from_user.id, platform, "video")
+    db.log_download(callback.from_user.id, platform, "video", url)
 
     await callback.message.edit_text(
         "✅ Видео скачано!\n\n"

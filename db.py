@@ -32,10 +32,21 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 platform TEXT NOT NULL,
                 media_type TEXT NOT NULL,
+                url TEXT,
                 created_at TEXT NOT NULL
             )
             """
         )
+
+        # На случай если downloads уже существовала до появления колонки url
+        # (база создана более старой версией бота).
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(downloads)")
+        }
+
+        if "url" not in columns:
+            conn.execute("ALTER TABLE downloads ADD COLUMN url TEXT")
 
 
 def _now() -> str:
@@ -59,14 +70,14 @@ def touch_user(user_id: int, username: Optional[str], first_name: Optional[str])
         )
 
 
-def log_download(user_id: int, platform: str, media_type: str):
+def log_download(user_id: int, platform: str, media_type: str, url: str):
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO downloads (user_id, platform, media_type, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO downloads (user_id, platform, media_type, url, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (user_id, platform, media_type, _now()),
+            (user_id, platform, media_type, url, _now()),
         )
 
 
@@ -135,6 +146,20 @@ def get_recent_users(limit: int = 20) -> list[sqlite3.Row]:
             LIMIT ?
             """,
             (limit,),
+        ).fetchall()
+
+
+def get_user_downloads(user_id: int, limit: int = 20) -> list[sqlite3.Row]:
+    with _connect() as conn:
+        return conn.execute(
+            """
+            SELECT platform, media_type, url, created_at
+            FROM downloads
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
         ).fetchall()
 
 
