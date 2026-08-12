@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
@@ -7,13 +8,20 @@ from urllib.parse import urlparse
 import yt_dlp
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
+    ErrorEvent,
     Message,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    MenuButtonCommands,
     TelegramObject,
 )
 from aiogram.fsm.context import FSMContext
@@ -37,16 +45,100 @@ if not TOKEN:
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
+# Адрес своего Bot API сервера (telegram-bot-api), напр. http://localhost:8081
+# Если не задан — используется обычный облачный api.telegram.org с лимитом
+# отправки файла в 20 MB.
+BOT_API_SERVER = os.getenv("BOT_API_SERVER", "").strip()
+
+# True, если telegram-bot-api запущен с флагом --local (бот и сервер должны
+# быть на одной машине с общей файловой системой). В этом режиме файлы
+# передаются серверу локальным путём напрямую с диска, без HTTP-заливки —
+# и без ограничения на размер.
+BOT_API_LOCAL = os.getenv("BOT_API_LOCAL", "").strip().lower() in ("1", "true", "yes")
+
 
 def is_admin(user_id: int) -> bool:
     return ADMIN_ID != 0 and user_id == ADMIN_ID
 
 
-bot = Bot(token=TOKEN)
+if BOT_API_SERVER:
+    session = AiohttpSession(
+        api=TelegramAPIServer.from_base(
+            BOT_API_SERVER,
+            is_local=BOT_API_LOCAL,
+        )
+    )
+    bot = Bot(token=TOKEN, session=session)
+
+    if BOT_API_LOCAL:
+        # Локальный путь на диске сервер читает сам — практических
+        # ограничений на размер нет (кроме места на диске).
+        MAX_FILE_SIZE = 4000 * 1024 * 1024
+    else:
+        # Свой Bot API сервер без --local всё равно поднимает лимит
+        # отправки файла ботом до 2000 MB.
+        MAX_FILE_SIZE = 2000 * 1024 * 1024
+else:
+    bot = Bot(token=TOKEN)
+    # Лимит облачного api.telegram.org на отправку файла ботом
+    MAX_FILE_SIZE = 20 * 1024 * 1024
+
 dp = Dispatcher()
 
-DOWNLOAD_DIR = Path("downloads")
+# Абсолютный путь важен для --local режима: telegram-bot-api — отдельный
+# процесс и может быть запущен из другого рабочего каталога, относительный
+# путь у него означал бы другое место на диске.
+DOWNLOAD_DIR = Path(__file__).resolve().parent / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+
+
+def make_input_file(path: str):
+    """FSInputFile для обычной загрузки или "сырой" путь для --local режима
+    (сервер сам читает файл с диска, без пересылки по HTTP)."""
+
+    if BOT_API_LOCAL:
+        return str(Path(path).resolve())
+
+    return FSInputFile(path)
+
+GENERIC_ERROR_TEXT = (
+    "❌ Что-то пошло не так. Мы уже разбираемся.\n\n"
+    "Попробуй ещё раз чуть позже."
+)
+
+
+# ============================================================
+# Уведомление админа об ошибках
+# ============================================================
+
+async def notify_admin(text: str):
+    """Отправляет текст админу, не роняя бота, если это не удалось."""
+
+    if ADMIN_ID == 0:
+        return
+
+    if len(text) > 4000:
+        text = text[:2000] + "\n...\n" + text[-1900:]
+
+    try:
+        await bot.send_message(ADMIN_ID, text)
+    except Exception:
+        pass
+
+
+async def report_error(context: str, exc: Exception, **extra):
+    """Логирует ошибку в консоль и шлёт подробности админу в личку."""
+
+    details = "\n".join(f"{k}: {v}" for k, v in extra.items())
+    tb = "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__)
+    )
+
+    print(f"[ERROR] {context}\n{details}\n{tb}")
+
+    await notify_admin(
+        f"⚠️ Ошибка: {context}\n{details}\n\n{tb}"
+    )
 
 
 # ============================================================
@@ -406,9 +498,16 @@ async def video_type_handler(
 
     except Exception as e:
 
+        await report_error(
+            "get_video_info",
+            e,
+            user_id=callback.from_user.id,
+            url=url,
+        )
+
         await callback.message.edit_text(
-            f"❌ Не удалось получить информацию о видео.\n\n"
-            f"{e}"
+            "❌ Не удалось получить информацию о видео.\n\n"
+            "Попробуй другую ссылку или повтори позже."
         )
 
         await reset_state(state)
@@ -526,9 +625,14 @@ async def audio_type_handler(
 
     except Exception as e:
 
-        await callback.message.edit_text(
-            f"❌ Ошибка при скачивании:\n\n{e}"
+        await report_error(
+            "download_audio",
+            e,
+            user_id=callback.from_user.id,
+            url=url,
         )
+
+        await callback.message.edit_text(GENERIC_ERROR_TEXT)
 
         await reset_state(state)
 
@@ -538,6 +642,23 @@ async def audio_type_handler(
 
     db.log_download(callback.from_user.id, platform, "audio", url)
 
+    file_size = os.path.getsize(filepath)
+
+    if file_size > MAX_FILE_SIZE:
+
+        await callback.message.edit_text(
+            "⚠️ Файл слишком большой для отправки в Telegram "
+            f"({file_size / 1024 / 1024:.1f} MB, лимит "
+            f"{MAX_FILE_SIZE / 1024 / 1024:.0f} MB).\n\n"
+            "К сожалению, отправить его не получится."
+        )
+
+        await reset_state(state)
+
+        await callback.message.answer( "🔗 Жду новую ссылку." )
+
+        return
+
     await callback.message.edit_text(
         "✅ Аудио скачано!\n\n"
         "Отправляю файл..."
@@ -545,7 +666,7 @@ async def audio_type_handler(
 
     try:
 
-        audio = FSInputFile(filepath)
+        audio = make_input_file(filepath)
 
         await callback.message.answer_document(
             audio
@@ -553,9 +674,14 @@ async def audio_type_handler(
 
     except Exception as e:
 
-        await callback.message.answer(
-            f"❌ Не удалось отправить файл:\n\n{e}"
+        await report_error(
+            "send_audio",
+            e,
+            user_id=callback.from_user.id,
+            url=url,
         )
+
+        await callback.message.answer(GENERIC_ERROR_TEXT)
 
     await reset_state(state)
 
@@ -601,9 +727,15 @@ async def quality_handler(
 
     except Exception as e:
 
-        await callback.message.edit_text(
-            f"❌ Ошибка при скачивании:\n\n{e}"
+        await report_error(
+            "download_video",
+            e,
+            user_id=callback.from_user.id,
+            url=url,
+            format_id=format_id,
         )
+
+        await callback.message.edit_text(GENERIC_ERROR_TEXT)
 
         await reset_state(state)
 
@@ -613,6 +745,23 @@ async def quality_handler(
 
     db.log_download(callback.from_user.id, platform, "video", url)
 
+    file_size = os.path.getsize(filepath)
+
+    if file_size > MAX_FILE_SIZE:
+
+        await callback.message.edit_text(
+            "⚠️ Файл слишком большой для отправки в Telegram "
+            f"({file_size / 1024 / 1024:.1f} MB, лимит "
+            f"{MAX_FILE_SIZE / 1024 / 1024:.0f} MB).\n\n"
+            "Попробуй выбрать более низкое качество."
+        )
+
+        await reset_state(state)
+
+        await callback.message.answer( "🔗 Жду новую ссылку." )
+
+        return
+
     await callback.message.edit_text(
         "✅ Видео скачано!\n\n"
         "Отправляю файл..."
@@ -620,7 +769,7 @@ async def quality_handler(
 
     try:
 
-        video = FSInputFile(filepath)
+        video = make_input_file(filepath)
 
         await callback.message.answer_document(
             video
@@ -628,9 +777,14 @@ async def quality_handler(
 
     except Exception as e:
 
-        await callback.message.answer(
-            f"❌ Не удалось отправить файл:\n\n{e}"
+        await report_error(
+            "send_video",
+            e,
+            user_id=callback.from_user.id,
+            url=url,
         )
+
+        await callback.message.answer(GENERIC_ERROR_TEXT)
 
     await reset_state(state)
 
@@ -655,6 +809,38 @@ async def cancel_handler(
         "❌ Скачивание отменено.\n\n"
         "Отправь новую ссылку."
     )
+
+
+# ============================================================
+# Глобальный обработчик необработанных ошибок
+# ============================================================
+
+@dp.errors()
+async def global_error_handler(event: ErrorEvent):
+
+    update = event.update
+
+    chat_id = None
+
+    if update.message:
+        chat_id = update.message.chat.id
+    elif update.callback_query and update.callback_query.message:
+        chat_id = update.callback_query.message.chat.id
+
+    await report_error(
+        "unhandled",
+        event.exception,
+        update_id=update.update_id,
+        chat_id=chat_id,
+    )
+
+    if chat_id is not None:
+        try:
+            await bot.send_message(chat_id, GENERIC_ERROR_TEXT)
+        except Exception:
+            pass
+
+    return True
 
 
 # ============================================================
@@ -796,6 +982,35 @@ def download_audio(
 
 
 # ============================================================
+# Команды бота (кнопка "Меню")
+# ============================================================
+
+async def setup_commands():
+
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Начать / перезапустить бота"),
+        ],
+        scope=BotCommandScopeDefault(),
+    )
+
+    if ADMIN_ID != 0:
+
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Начать / перезапустить бота"),
+                BotCommand(command="admin_stats", description="Статистика бота"),
+                BotCommand(command="admin_users", description="Последние пользователи"),
+                BotCommand(command="admin_top", description="Топ по скачиваниям"),
+                BotCommand(command="admin_links", description="Ссылки пользователя <user_id>"),
+            ],
+            scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+        )
+
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+
+# ============================================================
 # Запуск бота
 # ============================================================
 
@@ -806,6 +1021,8 @@ async def main():
     print("🤖 Бот запущен!")
 
     await bot.delete_webhook(drop_pending_updates=True)
+
+    await setup_commands()
 
     await dp.start_polling(bot)
 
