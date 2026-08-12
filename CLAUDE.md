@@ -6,9 +6,9 @@
 
 ## О проекте
 
-Telegram-бот на `aiogram` для скачивания видео/аудио с YouTube и TikTok
-через `yt-dlp`. Весь код живёт в одном файле `bot.py`. Подробности по
-установке и запуску — см. `README.md`.
+Telegram-бот на `aiogram` для скачивания видео/аудио с YouTube, TikTok и
+Instagram через `yt-dlp`. Весь код живёт в одном файле `bot.py`. Подробности
+по установке и запуску — см. `README.md`.
 
 ## Ключевые решения
 
@@ -99,6 +99,16 @@ Telegram-бот на `aiogram` для скачивания видео/аудио
   админ-команды) + отдельно `/admin_*` в scope `BotCommandScopeChat(chat_id=ADMIN_ID)`
   (работает, т.к. в личных чатах chat_id == user_id), плюс явный
   `bot.set_chat_menu_button(menu_button=MenuButtonCommands())`.
+- **(текущая правка)** — добавлена поддержка Instagram: `get_platform()`
+  распознаёт `instagram.com`/`instagr.am` и возвращает `"instagram"`.
+  Отдельной ветки в `download_video()` не понадобилось — instagram, как и
+  tiktok, попадает в `else`-ветку (`format=format_id` без merge с
+  bestaudio), т.к. yt-dlp обычно отдаёт для Instagram уже смукшированные
+  форматы (видео+аудио вместе), в отличие от YouTube. `download_audio()`
+  тоже платформонезависим, изменений не потребовал. Ограничение: yt-dlp
+  для Instagram работает менее надёжно без cookies/авторизации — публичные
+  посты/reels обычно скачиваются, но чаще случаются ошибки
+  логина/rate-limit, чем для YouTube/TikTok. Поддержки cookies в боте нет.
 
 > При внесении значимых изменений в бота (новая платформа, новый формат,
 > изменение FSM, смена структуры хранения файлов и т.п.) — дополнять этот

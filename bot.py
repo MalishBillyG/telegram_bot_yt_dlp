@@ -193,6 +193,9 @@ def get_platform(url: str):
     if "tiktok.com" in domain:
         return "tiktok"
 
+    if "instagram.com" in domain or "instagr.am" in domain:
+        return "instagram"
+
     return None
 
 
@@ -291,7 +294,7 @@ async def start_handler(message: Message, state: FSMContext):
 
     await message.answer(
         "Привет! 👋\n\n"
-        "Отправь мне ссылку на YouTube или TikTok."
+        "Отправь мне ссылку на YouTube, TikTok или Instagram."
     )
 
 
@@ -446,7 +449,7 @@ async def url_handler(message: Message, state: FSMContext):
     if platform is None:
         await message.answer(
             "❌ Я не смог определить платформу.\n\n"
-            "Отправь ссылку на YouTube или TikTok."
+            "Отправь ссылку на YouTube, TikTok или Instagram."
         )
         return
 
