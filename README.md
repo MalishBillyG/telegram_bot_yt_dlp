@@ -34,14 +34,16 @@ BOT_TOKEN=<токен от BotFather>
 ADMIN_ID=<ваш telegram id, опционально>
 BOT_API_SERVER=<опционально, см. ниже>
 BOT_API_LOCAL=<опционально, см. ниже>
+TG_API_ID=<опционально, см. ниже>
+TG_API_HASH=<опционально, см. ниже>
 INSTAGRAM_COOKIES_FILE=<опционально, см. ниже>
 ```
 
 `ADMIN_ID` нужен только для доступа к админ-командам (см. ниже). Узнать
 свой telegram id можно, например, у [@userinfobot](https://t.me/userinfobot).
 
-`BOT_API_SERVER`/`BOT_API_LOCAL` нужны только если хотите отправлять файлы
-больше 20 MB — см. раздел
+`BOT_API_SERVER`/`BOT_API_LOCAL`/`TG_API_ID`/`TG_API_HASH` нужны только если
+хотите отправлять файлы больше 20 MB — см. раздел
 [Отправка больших файлов](#отправка-больших-файлов-telegram-bot-api-server).
 
 `INSTAGRAM_COOKIES_FILE` нужен только чтобы Instagram работал стабильнее —
@@ -138,26 +140,14 @@ for row in conn.execute('SELECT * FROM users'):
 `api_hash` (строка). Это бесплатно и не связано с ботом — это creds
 приложения, от имени которого локальный сервер общается с Telegram.
 
-### 2. Запустите telegram-bot-api с `--local`
+### 2. Соберите telegram-bot-api
 
 Без Docker (проще всего, раз всё на одной машине — не нужно думать про
 совпадение путей между хостом и контейнером). Соберите бинарник из
 исходников по инструкции в
 [официальном репозитории](https://github.com/tdlib/telegram-bot-api#building)
-(C++, нужен cmake/gperf/openssl) и запустите:
-
-```bash
-telegram-bot-api \
-  --api-id=<api_id> \
-  --api-hash=<api_hash> \
-  --local \
-  --http-ip-address=127.0.0.1 \
-  --http-port=8081
-```
-
-`--http-ip-address=127.0.0.1` — сервер слушает только локально, снаружи
-машины порт `8081` вообще не виден (доп. firewall не нужен, но лишним не
-будет).
+(C++, нужен cmake/gperf/openssl) — после сборки бинарник должен быть
+доступен в `PATH` (проверить: `telegram-bot-api --version`).
 
 Если предпочитаете Docker — используйте образ
 [aiogram/telegram-bot-api](https://hub.docker.com/r/aiogram/telegram-bot-api)
@@ -178,22 +168,33 @@ docker run -d \
   aiogram/telegram-bot-api:latest --local
 ```
 
-Проверьте, что сервер поднялся:
+> С Docker `make run` сервер сам не поднимет (см. ниже) — Docker-контейнер
+> запускайте/останавливайте отдельно (`docker start/stop telegram-bot-api`),
+> а `.env` настройте как в шаге 3, но без `TG_API_ID`/`TG_API_HASH`.
 
-```bash
-curl http://127.0.0.1:8081/
-# должен ответить что-то вроде "Error: 404 Not Found" — это нормально,
-# значит сервер жив и просто не понял путь без токена
-```
-
-### 3. Укажите боту адрес сервера и включите local-режим
+### 3. Пропишите настройки в `.env` — `make run` поднимет сервер сам
 
 В `.env` на машине с `bot.py`:
 
 ```
 BOT_API_SERVER=http://127.0.0.1:8081
 BOT_API_LOCAL=true
+TG_API_ID=<api_id>
+TG_API_HASH=<api_hash>
 ```
+
+Если `BOT_API_LOCAL=true` и заданы `TG_API_ID`/`TG_API_HASH`, а бинарник
+`telegram-bot-api` есть в `PATH` — `make run` перед запуском бота сам
+поднимет `telegram-bot-api --local --http-ip-address=127.0.0.1
+--http-port=8081` в фоне (лог пишется в `telegram-bot-api.log`) и погасит
+его при остановке бота (`Ctrl+C`). `TG_API_ID`/`TG_API_HASH` читает только
+`Makefile` — самому `bot.py` они не нужны, поэтому в других сценариях
+(Docker, сервер на другой машине) их можно не указывать.
+
+`--http-ip-address=127.0.0.1` — сервер слушает только локально, снаружи
+машины порт `8081` вообще не виден (доп. firewall не нужен, но лишним не
+будет). Порт берётся из `BOT_API_SERVER` — если поменяете там порт, `make
+run` запустит сервер на нём же.
 
 Если `BOT_API_SERVER` не задан — бот как и раньше работает через обычный
 `api.telegram.org` с лимитом 20 MB. С `BOT_API_SERVER` без `--local`/
@@ -203,7 +204,15 @@ HTTP, просто на свой сервер вместо облачного). 
 передаёт серверу путь к файлу на диске (`make_input_file()` в `bot.py`
 сам решает, что отправлять: `FSInputFile` или строку с абсолютным путём).
 
-Перезапустите бота (`make run`).
+Проверить, что сервер поднялся, можно и вручную:
+
+```bash
+curl http://127.0.0.1:8081/
+# должен ответить что-то вроде "Error: 404 Not Found" — это нормально,
+# значит сервер жив и просто не понял путь без токена
+```
+
+Запустите бота: `make run`.
 
 ### Если решите разнести бота и сервер по разным машинам
 
@@ -215,6 +224,12 @@ HTTP, просто на свой сервер вместо облачного). 
 Проще всего — SSH-туннель (`ssh -N -L 8081:localhost:8081 user@сервер`) или
 VPN (WireGuard/Tailscale) между машинами, и `BOT_API_SERVER=http://localhost:8081`
 на стороне бота (через туннель).
+
+Автозапуск сервера из `make run` (шаг 3 выше) в этом сценарии не сработает
+— `telegram-bot-api` физически не будет установлен на машине с ботом.
+Запускайте сервер на своей машине вручную/как отдельный сервис, а в `.env`
+бота просто не указывайте `TG_API_ID`/`TG_API_HASH` (`BOT_API_LOCAL` тоже
+уберите, раз `--local` не используется).
 
 ## Cookies для Instagram
 
