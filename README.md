@@ -12,7 +12,8 @@ Telegram-бот на `aiogram` для скачивания видео (YouTube, 
 > Instagram у `yt-dlp` работает менее стабильно, чем YouTube/TikTok —
 > без авторизации (cookies) публичные посты/reels обычно скачиваются, но
 > Instagram может отдавать ошибку логина/rate-limit чаще, чем другие
-> платформы. Поддержки cookies в боте сейчас нет.
+> платформы. Опционально можно настроить cookies залогиненного аккаунта —
+> см. раздел [Cookies для Instagram](#cookies-для-instagram).
 
 ## Требования
 
@@ -33,6 +34,7 @@ BOT_TOKEN=<токен от BotFather>
 ADMIN_ID=<ваш telegram id, опционально>
 BOT_API_SERVER=<опционально, см. ниже>
 BOT_API_LOCAL=<опционально, см. ниже>
+INSTAGRAM_COOKIES_FILE=<опционально, см. ниже>
 ```
 
 `ADMIN_ID` нужен только для доступа к админ-командам (см. ниже). Узнать
@@ -41,6 +43,9 @@ BOT_API_LOCAL=<опционально, см. ниже>
 `BOT_API_SERVER`/`BOT_API_LOCAL` нужны только если хотите отправлять файлы
 больше 20 MB — см. раздел
 [Отправка больших файлов](#отправка-больших-файлов-telegram-bot-api-server).
+
+`INSTAGRAM_COOKIES_FILE` нужен только чтобы Instagram работал стабильнее —
+см. раздел [Cookies для Instagram](#cookies-для-instagram).
 
 ## Запуск
 
@@ -210,3 +215,58 @@ HTTP, просто на свой сервер вместо облачного). 
 Проще всего — SSH-туннель (`ssh -N -L 8081:localhost:8081 user@сервер`) или
 VPN (WireGuard/Tailscale) между машинами, и `BOT_API_SERVER=http://localhost:8081`
 на стороне бота (через туннель).
+
+## Cookies для Instagram
+
+Без авторизации Instagram чаще отдаёт `yt-dlp` ошибки логина/rate-limit, чем
+YouTube или TikTok. Чтобы бот обращался к Instagram от имени залогиненного
+аккаунта, можно передать `yt-dlp` cookies этого аккаунта.
+
+**Учтите: файл с cookies — по сути сохранённая сессия входа, чувствительные
+данные уровня пароля.** Всё, что скачивает бот через Instagram, будет
+выглядеть как активность этого аккаунта — используйте отдельный аккаунт,
+не основной личный, и не публикуйте/не коммитьте файл с cookies в git.
+
+### 1. Экспортируйте cookies.txt
+
+Залогиньтесь в Instagram в браузере на нужном аккаунте и экспортируйте
+cookies в формате Netscape, например расширением
+[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+для Chrome/Edge (или аналог для Firefox) — откройте instagram.com, нажмите
+на иконку расширения, экспортируйте cookies текущей вкладки в файл.
+
+Альтернатива без расширений — сам `yt-dlp` умеет вытащить cookies прямо из
+установленного браузера:
+
+```bash
+.venv/bin/yt-dlp --cookies-from-browser chrome --cookies instagram_cookies.txt --skip-download "https://www.instagram.com/"
+```
+
+(вместо `chrome` — `firefox`, `edge` и т.п., смотря где залогинены)
+
+### 2. Положите файл рядом с ботом и укажите путь
+
+```bash
+mv instagram_cookies.txt /root/claude_projects/telegram_bot_yt_dlp/
+```
+
+В `.env`:
+
+```
+INSTAGRAM_COOKIES_FILE=/root/claude_projects/telegram_bot_yt_dlp/instagram_cookies.txt
+```
+
+В `.gitignore` добавлено правило `*cookies*.txt` — файл под именем из
+примера выше коммититься не будет. Если назовёте файл иначе, проверьте,
+что он всё равно попадает под игнор (или добавьте своё правило) — коммитить
+его в git нельзя.
+
+Если переменная не задана или файл по указанному пути не существует — бот
+просто обращается к Instagram анонимно, как и раньше, без ошибок.
+
+### 3. Обновляйте cookies по мере протухания
+
+Сессия рано или поздно истекает (Instagram может разлогинить). Если после
+рабочей связки внезапно снова посыпались ошибки логина — просто повторите
+шаг 1 и перезапишите файл, перезапускать бота не обязательно (`cookiefile`
+читается при каждом скачивании заново).

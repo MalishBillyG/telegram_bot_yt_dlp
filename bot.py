@@ -45,6 +45,11 @@ if not TOKEN:
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
+# Путь к cookies.txt залогиненного Instagram-аккаунта (формат Netscape,
+# экспортируется расширением вроде "Get cookies.txt"). Опционально — без
+# него Instagram работает анонимно и чаще ловит login/rate-limit ошибки.
+INSTAGRAM_COOKIES_FILE = os.getenv("INSTAGRAM_COOKIES_FILE", "").strip()
+
 # Адрес своего Bot API сервера (telegram-bot-api), напр. http://localhost:8081
 # Если не задан — используется обычный облачный api.telegram.org с лимитом
 # отправки файла в 20 MB.
@@ -200,6 +205,20 @@ def get_platform(url: str):
 
 
 # ============================================================
+# Cookies для yt-dlp (сейчас только Instagram)
+# ============================================================
+
+def cookies_options(platform: str) -> dict:
+    if platform != "instagram" or not INSTAGRAM_COOKIES_FILE:
+        return {}
+
+    if not os.path.isfile(INSTAGRAM_COOKIES_FILE):
+        return {}
+
+    return {"cookiefile": INSTAGRAM_COOKIES_FILE}
+
+
+# ============================================================
 # Клавиатура выбора типа
 # ============================================================
 
@@ -224,11 +243,12 @@ def download_type_keyboard():
 # Получение информации о видео
 # ============================================================
 
-def get_video_info(url: str):
+def get_video_info(url: str, platform: str):
     options = {
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        **cookies_options(platform),
     }
 
     with yt_dlp.YoutubeDL(options) as ydl:
@@ -496,7 +516,8 @@ async def video_type_handler(
 
         info = await asyncio.to_thread(
             get_video_info,
-            url
+            url,
+            platform
         )
 
     except Exception as e:
@@ -623,6 +644,7 @@ async def audio_type_handler(
         filepath = await asyncio.to_thread(
             download_audio,
             url,
+            platform,
             callback.from_user.id
         )
 
@@ -881,6 +903,8 @@ def download_video(
             "merge_output_format": "mp4",
 
             "quiet": True,
+
+            **cookies_options(platform),
         }
 
     else:
@@ -895,6 +919,8 @@ def download_video(
             "noplaylist": True,
 
             "quiet": True,
+
+            **cookies_options(platform),
         }
 
     with yt_dlp.YoutubeDL(options) as ydl:
@@ -934,6 +960,7 @@ def download_video(
 
 def download_audio(
     url: str,
+    platform: str,
     user_id: int
 ):
 
@@ -962,6 +989,8 @@ def download_audio(
                 "preferredquality": "192",
             }
         ],
+
+        **cookies_options(platform),
     }
 
     with yt_dlp.YoutubeDL(options) as ydl:
