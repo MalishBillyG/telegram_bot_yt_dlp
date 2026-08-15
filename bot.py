@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -204,6 +205,28 @@ def get_platform(url: str):
     return None
 
 
+def normalize_url(url: str, platform: str) -> str:
+    """Убирает трекинг query-параметры (?_r=...&_t=...) из полных
+    tiktok.com-ссылок. По наблюдениям из
+    https://github.com/yt-dlp/yt-dlp/issues/17332 такие ссылки чаще ловят
+    "Unable to extract universal data for rehydration" — "чистый" URL без
+    хвоста стабильнее парсится. Короткие vt.tiktok.com/vm.tiktok.com-ссылки
+    не трогаем, у них нет такого хвоста."""
+
+    if platform != "tiktok":
+        return url
+
+    parsed = urlparse(url)
+
+    if "vt.tiktok.com" in parsed.netloc or "vm.tiktok.com" in parsed.netloc:
+        return url
+
+    if not parsed.query:
+        return url
+
+    return parsed._replace(query="", fragment="").geturl()
+
+
 # ============================================================
 # Cookies для yt-dlp (сейчас только Instagram)
 # ============================================================
@@ -216,6 +239,39 @@ def cookies_options(platform: str) -> dict:
         return {}
 
     return {"cookiefile": INSTAGRAM_COOKIES_FILE}
+
+
+# ============================================================
+# Retry для нестабильной TikTok-ошибки экстракции
+# ============================================================
+
+# TikTok иногда отдаёт страницу, которую yt-dlp не может распарсить —
+# ошибка "Unable to extract universal data for rehydration". Это открытый
+# баг на стороне TikTok/yt-dlp без фикса (issue #17332), но по наблюдениям
+# из треда повторная попытка через пару секунд часто помогает.
+TIKTOK_RETRYABLE_ERROR = "universal data for rehydration"
+TIKTOK_RETRY_ATTEMPTS = 2
+TIKTOK_RETRY_DELAY = 3.0
+
+
+def extract_with_retry(ydl: "yt_dlp.YoutubeDL", url: str, platform: str, download: bool):
+    attempt = 0
+
+    while True:
+        try:
+            return ydl.extract_info(url, download=download)
+        except Exception as exc:
+            attempt += 1
+
+            is_retryable = (
+                platform == "tiktok"
+                and TIKTOK_RETRYABLE_ERROR in str(exc).lower()
+            )
+
+            if not is_retryable or attempt > TIKTOK_RETRY_ATTEMPTS:
+                raise
+
+            time.sleep(TIKTOK_RETRY_DELAY)
 
 
 # ============================================================
@@ -252,7 +308,7 @@ def get_video_info(url: str, platform: str):
     }
 
     with yt_dlp.YoutubeDL(options) as ydl:
-        return ydl.extract_info(url, download=False)
+        return extract_with_retry(ydl, url, platform, download=False)
 
 
 # ============================================================
@@ -472,6 +528,8 @@ async def url_handler(message: Message, state: FSMContext):
             "Отправь ссылку на YouTube, TikTok или Instagram."
         )
         return
+
+    url = normalize_url(url, platform)
 
     # Сохраняем данные пользователя в FSM
     await state.update_data(
@@ -925,10 +983,7 @@ def download_video(
 
     with yt_dlp.YoutubeDL(options) as ydl:
 
-        info = ydl.extract_info(
-            url,
-            download=True
-        )
+        info = extract_with_retry(ydl, url, platform, download=True)
 
         video_id = info["id"]
 
@@ -995,10 +1050,7 @@ def download_audio(
 
     with yt_dlp.YoutubeDL(options) as ydl:
 
-        info = ydl.extract_info(
-            url,
-            download=True
-        )
+        info = extract_with_retry(ydl, url, platform, download=True)
 
         video_id = info["id"]
 
