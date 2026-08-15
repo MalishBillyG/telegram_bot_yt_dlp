@@ -242,36 +242,31 @@ def cookies_options(platform: str) -> dict:
 
 
 # ============================================================
-# Retry для нестабильной TikTok-ошибки экстракции
+# Retry для нестабильных ошибок экстракции yt-dlp
 # ============================================================
 
-# TikTok иногда отдаёт страницу, которую yt-dlp не может распарсить —
-# ошибка "Unable to extract universal data for rehydration". Это открытый
-# баг на стороне TikTok/yt-dlp без фикса (issue #17332), но по наблюдениям
-# из треда повторная попытка через пару секунд часто помогает.
-TIKTOK_RETRYABLE_ERROR = "universal data for rehydration"
-TIKTOK_RETRY_ATTEMPTS = 2
-TIKTOK_RETRY_DELAY = 3.0
+# Источники видео (в первую очередь TikTok, см. issue #17332 — открытый баг
+# без фикса) периодически отдают страницу/ответ, который yt-dlp не может
+# распарсить с первого раза, хотя повторный запрос через пару секунд часто
+# проходит успешно. Ретраим на любой ошибке extract_info для всех платформ —
+# сетевые сбои и подобные временные проблемы бывают не только у TikTok.
+RETRY_ATTEMPTS = 2
+RETRY_DELAY = 3.0
 
 
-def extract_with_retry(ydl: "yt_dlp.YoutubeDL", url: str, platform: str, download: bool):
+def extract_with_retry(ydl: "yt_dlp.YoutubeDL", url: str, download: bool):
     attempt = 0
 
     while True:
         try:
             return ydl.extract_info(url, download=download)
-        except Exception as exc:
+        except Exception:
             attempt += 1
 
-            is_retryable = (
-                platform == "tiktok"
-                and TIKTOK_RETRYABLE_ERROR in str(exc).lower()
-            )
-
-            if not is_retryable or attempt > TIKTOK_RETRY_ATTEMPTS:
+            if attempt > RETRY_ATTEMPTS:
                 raise
 
-            time.sleep(TIKTOK_RETRY_DELAY)
+            time.sleep(RETRY_DELAY)
 
 
 # ============================================================
@@ -308,7 +303,7 @@ def get_video_info(url: str, platform: str):
     }
 
     with yt_dlp.YoutubeDL(options) as ydl:
-        return extract_with_retry(ydl, url, platform, download=False)
+        return extract_with_retry(ydl, url, download=False)
 
 
 # ============================================================
@@ -983,7 +978,7 @@ def download_video(
 
     with yt_dlp.YoutubeDL(options) as ydl:
 
-        info = extract_with_retry(ydl, url, platform, download=True)
+        info = extract_with_retry(ydl, url, download=True)
 
         video_id = info["id"]
 
@@ -1050,7 +1045,7 @@ def download_audio(
 
     with yt_dlp.YoutubeDL(options) as ydl:
 
-        info = extract_with_retry(ydl, url, platform, download=True)
+        info = extract_with_retry(ydl, url, download=True)
 
         video_id = info["id"]
 
