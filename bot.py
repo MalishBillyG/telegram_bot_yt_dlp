@@ -99,11 +99,16 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 
 def make_input_file(path: str):
-    """FSInputFile для обычной загрузки или "сырой" путь для --local режима
-    (сервер сам читает файл с диска, без пересылки по HTTP)."""
+    """FSInputFile для обычной загрузки или file://-URI для --local режима
+    (сервер сам читает файл с диска, без пересылки по HTTP). Голый абсолютный
+    путь без схемы telegram-bot-api трактует как HTTP(S) URL и падает с
+    "invalid file HTTP URL specified: URL host is empty" — нужна именно
+    file://-схема (см. официальный README: "Upload files using their local
+    path and the file URI scheme"). Path.as_uri() также корректно
+    percent-encode'ит путь (пробелы и т.п.)."""
 
     if BOT_API_LOCAL:
-        return str(Path(path).resolve())
+        return Path(path).resolve().as_uri()
 
     return FSInputFile(path)
 
