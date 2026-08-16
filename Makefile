@@ -28,7 +28,8 @@ run:
 		PORT=$$(echo "$$BOT_API_SERVER" | grep -oE '[0-9]+$$'); \
 		PORT=$${PORT:-8081}; \
 		echo "Запускаю telegram-bot-api на порту $$PORT..."; \
-		telegram-bot-api --api-id="$$TG_API_ID" --api-hash="$$TG_API_HASH" --local --http-ip-address=127.0.0.1 --http-port="$$PORT" > telegram-bot-api.log 2>&1 & \
+		mkdir -p "$$HOME/.local/share/telegram-bot-api"; \
+		telegram-bot-api --api-id="$$TG_API_ID" --api-hash="$$TG_API_HASH" --local --http-ip-address=127.0.0.1 --http-port="$$PORT" --dir="$$HOME/.local/share/telegram-bot-api" > telegram-bot-api.log 2>&1 & \
 		trap "echo 'Останавливаю telegram-bot-api...'; kill $$! 2>/dev/null" EXIT; \
 		sleep 1; \
 	elif [ "$$BOT_API_LOCAL" = "true" ]; then \

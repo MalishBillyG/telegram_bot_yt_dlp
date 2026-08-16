@@ -4,3 +4,7 @@ __pycache__/
 downloads
 bot.db
 *cookies*.txt
+telegram-bot-api.log
+*.binlog
+[0-9]*:*/
+/telegram-bot-api/
