@@ -210,6 +210,14 @@ def get_platform(url: str):
     return None
 
 
+# TikTok/Instagram обычно отдают уже смукшированный видео+аудио прогрессивный
+# формат по прямой CDN-ссылке — её можно отдать в Telegram (document=url) и
+# сервер сам всё скачает и отправит, без скачивания на диск и загрузки от
+# бота. YouTube сюда не входит: качественные форматы там раздельные
+# видео/аудио, слить их без локального ffmpeg-мержа нечем.
+DIRECT_URL_PLATFORMS = ("tiktok", "instagram")
+
+
 def normalize_url(url: str, platform: str) -> str:
     """Убирает трекинг query-параметры (?_r=...&_t=...) из полных
     tiktok.com-ссылок. По наблюдениям из
@@ -658,6 +666,7 @@ async def video_type_handler(
                 "height": f.get("height") or 0,
                 "fps": f.get("fps"),
                 "filesize": f.get("filesize"),
+                "url": f.get("url"),
             }
             for f in formats
         ]
@@ -792,6 +801,44 @@ async def quality_handler(
 
     url = data["url"]
     platform = data["platform"]
+
+    if platform in DIRECT_URL_PLATFORMS:
+
+        direct_url = next(
+            (
+                f.get("url")
+                for f in data.get("formats", [])
+                if f["format_id"] == format_id
+            ),
+            None,
+        )
+
+        if direct_url:
+
+            await callback.message.edit_text(
+                "⏳ Отправляю видео..."
+            )
+
+            try:
+
+                await callback.message.answer_document(direct_url)
+
+            except Exception as e:
+                # CDN-ссылка платформы недоступна серверам Telegram напрямую
+                # (протухла, требует конкретных заголовков и т.п.) — тихо
+                # переходим на обычное скачивание ниже, это ожидаемо и не
+                # повод дёргать админа.
+                print(f"[direct-url] send_document({platform}) failed: {e}")
+
+            else:
+
+                db.log_download(callback.from_user.id, platform, "video", url)
+
+                await reset_state(state)
+
+                await callback.message.answer( "🔗 Жду новую ссылку." )
+
+                return
 
     await callback.message.edit_text(
         "⏳ Скачиваю видео...\n\n"
